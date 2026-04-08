@@ -1,47 +1,42 @@
 #!/bin/sh
-# S99adguardhome - AdGuard Home init script for KeeneticOS 5.x+
-# BusyBox-native, no rc.func dependency
+# S99adguardhome - AdGuard Home init script for KeeneticOS
 # Repository: https://github.com/arl-spb/AdGuardHome-Keenetic
 
-NAME="adguardhome"
+ENABLED=yes
+PROCS=AdGuardHome
 DESC="AdGuard Home"
-BIN="/opt/bin/AdGuardHome"
+
+# Автоопределение пути к бинарнику (два возможных расположения)
+[ -x "/opt/bin/AdGuardHome" ] && BIN="/opt/bin/AdGuardHome"
+[ -x "/opt/etc/AdGuardHome/AdGuardHome" ] && BIN="/opt/etc/AdGuardHome/AdGuardHome"
+[ -z "$BIN" ] && exit 1
+
 CONF="/opt/etc/AdGuardHome/AdGuardHome.yaml"
 WORKDIR="/opt/etc/AdGuardHome"
 LOG="/opt/tmp/AdGuardHome.log"
-PIDFILE="/opt/var/run/${NAME}.pid"
+export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-is_running() {
-    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
-}
-
-start() {
-    is_running && { echo "$DESC already running."; return 0; }
-    echo -n "Starting $DESC... "
-    $BIN -c "$CONF" -w "$WORKDIR" --no-check-update >> "$LOG" 2>&1 &
-    echo $! > "$PIDFILE"
-    sleep 2
-    is_running && echo "done." || { echo "failed. See $LOG"; rm -f "$PIDFILE"; return 1; }
-}
-
-stop() {
-    is_running && {
-        echo -n "Stopping $DESC... "
-        kill "$(cat "$PIDFILE")" 2>/dev/null
-        for i in 1 2 3 4 5; do sleep 1; is_running || break; done
-        is_running && kill -9 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
-        rm -f "$PIDFILE"
-        echo "done."
-    } || echo "$DESC not running."
-}
-
-restart() { stop; sleep 1; start; }
-status() {
-    is_running && echo "$DESC is running (PID $(cat $PIDFILE))" || echo "$DESC is stopped"
-}
+is_running() { pgrep -f "AdGuardHome" >/dev/null 2>&1; }
 
 case "$1" in
-    start|stop|restart|status) $1 ;;
-    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+  start)
+    is_running && exit 0
+    $BIN -c "$CONF" -w "$WORKDIR" --no-check-update >> "$LOG" 2>&1 &
+    ;;
+  stop)
+    killall AdGuardHome 2>/dev/null
+    ;;
+  restart)
+    killall AdGuardHome 2>/dev/null
+    sleep 1
+    $0 start
+    ;;
+  status)
+    is_running && echo "Running" || echo "Stopped"
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
 esac
 exit 0
