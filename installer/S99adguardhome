@@ -2,18 +2,28 @@
 # S99adguardhome - AdGuard Home init script for KeeneticOS
 # Repository: https://github.com/arl-spb/AdGuardHome-Keenetic
 
+# === Load integration config with safe defaults ===
+: "${AG_LISTEN_IP:=127.0.0.1}"
+: "${AG_LISTEN_PORT:=5354}"
+: "${AG_POLICY_NAME:=adguard-clients}"
+: "${WORKDIR:=/opt/etc/AdGuardHome}"
+: "${CONF:=$WORKDIR/AdGuardHome.yaml}"
+: "${LOG:=/opt/tmp/AdGuardHome.log}"
+. /opt/etc/AdGuardHome/ag-keenetic.conf 2>/dev/null || true
+# === End config loading ===
+
 ENABLED=yes
 PROCS=AdGuardHome
 DESC="AdGuard Home"
 
 # Автоопределение пути к бинарнику (два возможных расположения)
 [ -x "/opt/bin/AdGuardHome" ] && BIN="/opt/bin/AdGuardHome"
-[ -x "/opt/etc/AdGuardHome/AdGuardHome" ] && BIN="/opt/etc/AdGuardHome/AdGuardHome"
+[ -x "$WORKDIR/AdGuardHome" ] && BIN="$WORKDIR/AdGuardHome"
 [ -z "$BIN" ] && exit 1
 
-CONF="/opt/etc/AdGuardHome/AdGuardHome.yaml"
-WORKDIR="/opt/etc/AdGuardHome"
-LOG="/opt/tmp/AdGuardHome.log"
+# Пути теперь берутся из конфига (или дефолтов выше)
+# CONF, WORKDIR, LOG уже заданы
+
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 is_running() { pgrep -f "AdGuardHome" >/dev/null 2>&1; }
