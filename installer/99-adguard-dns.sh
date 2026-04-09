@@ -13,8 +13,8 @@
 [ -n "$table" ] && [ "$table" != "nat" ] && exit 0
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Get policy mark once. If empty, ndm will call again in 1-2s.
-MARK=$(ndmc -c "show ip policy" 2>/dev/null | awk -v policy="$AG_POLICY_NAME" '/description = policy/ {found=1} found && /mark:/ {print $2; exit}' | tr -d '\r\n ')
+# Get policy mark - fixed variable interpolation
+MARK=$(ndmc -c "show ip policy" 2>/dev/null | grep "$AG_POLICY_NAME" -A5 | grep "mark:" | head -1 | awk '{print $2}' | tr -d '\r\n ')
 [ -z "$MARK" ] && exit 0
 
 MARK_HEX="0x$MARK"
