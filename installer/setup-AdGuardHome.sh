@@ -1,14 +1,21 @@
 #!/bin/sh
-# setup-AdGuardHome.sh - Minimal reliable installer for Keenetic
+# setup-AdGuardHome.sh - Installer for AdGuard Home on KeeneticOS
+# Repo: https://github.com/arl-spb/AdGuardHome-Keenetic
+# Usage: ./setup-AdGuardHome.sh {install|update|uninstall|status}
+
+# === LOGGING ===
 LOG="/tmp/ag-setup.log"
 : > "$LOG"
+
 log() { echo "$1" | tee -a "$LOG"; }
 warn() { log "WARN: $1"; }
 die() { log "FATAL: $1"; exit 1; }
 
+# === CONFIG ===
 REPO="arl-spb/AdGuardHome-Keenetic"
 BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/$REPO/$BRANCH/installer"
+
 AGH_DIR="/opt/etc/AdGuardHome"
 AGH_BIN="$AGH_DIR/AdGuardHome"
 CONF="$AGH_DIR/ag-keenetic.conf"
@@ -16,47 +23,7 @@ INIT="/opt/etc/init.d/S99adguardhome"
 HOOK="/opt/etc/ndm/netfilter.d/99-adguard-dns.sh"
 POLICY_NAME="adguard-clients"
 
-# === ARCH ===
-get_arch() {
-  arch=$(uname -m)
-  case "$arch" in
-    aarch64|arm64) ARCH_MAP="linux_arm64" ;;
-    mipsel) ARCH_MAP="linux_mipsle_softfloat" ;;
-    armv7l) ARCH_MAP="linux_armv7"; log "NOTE: ARMv7 experimental" ;;
-    *) die "Unsupported: $arch" ;;
-  esac
-  log "Arch: $arch -> $ARCH_MAP"
-}
-
-# === TOOLS ===
-check_tools() {
-  if command -v curl >/dev/null 2>&1; then
-    DOWNLOADER="curl"
-    log "Using: curl"
-  elif command -v wget >/dev/null 2>&1; then
-    DOWNLOADER="wget"
-    log "Using: wget"
-  else
-    die "Install curl: opkg install curl"
-  fi
-}
-
-# === DOWNLOAD FILE ===
-get_file() {
-  url="$1"
-  out="$2"
-  if [ "$DOWNLOADER" = "curl" ]; then
-    curl -kfsSL -o "$out" -A "Mozilla/5.0" "$url" 2>/dev/null
-  else    wget -qO "$out" --no-check-certificate "$url" 2>/dev/null
-  fi
-  if [ -s "$out" ]; then
-    return 0
-  else
-    return 1
-  fi
-}
-
-# === ASK YES/NO ===
+# === UTILITY: ASK YES/NO ===
 ask() {
   printf "%s [y/N]: " "$1"
   read answer
@@ -67,60 +34,138 @@ ask() {
   fi
 }
 
-# === STATUS ===
+# === UTILITY: DOWNLOAD FILE ===
+get_file() {
+  url="$1"
+  out="$2"
+  if [ "$DOWNLOADER" = "curl" ]; then
+    curl -kfsSL -o "$out" -A "Mozilla/5.0" "$url" 2>/dev/null
+  else
+    wget -qO "$out" --no-check-certificate "$url" 2>/dev/null
+  fi
+  if [ -s "$out" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+# === ARCHITECTURE DETECTION (Keenetic only) ===
+get_arch() {
+  arch=$(uname -m)
+  case "$arch" in
+    aarch64|arm64)
+      ARCH_MAP="linux_arm64"
+      ;;
+    mipsel)
+      ARCH_MAP="linux_mipsle_softfloat"
+      ;;
+    armv7l)
+      ARCH_MAP="linux_armv7"
+      log "NOTE: ARMv7 support is experimental on Keenetic"
+      ;;
+    *)
+      die "Unsupported for Keenetic: $arch
+This script supports only:
+  * aarch64 (ARM64) - Giga, Peak, Hero, Ultra, Skipper
+  * mipsel (MIPS LE) - Omni, Lite, Start, Air, City
+  * armv7l (ARMv7) - experimental"
+      ;;
+  esac
+  log "Architecture: $arch -> $ARCH_MAP"
+}
+
+# === TOOL CHECK: curl or wget ===
+check_tools() {
+  if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+    log "Using: curl"
+  else
+    if command -v wget >/dev/null 2>&1; then
+      DOWNLOADER="wget"
+      log "Using: wget"
+    else
+      die "No downloader found. Install: opkg install curl"
+    fi
+  fi
+}
+
+# === STATUS COMMAND ===
 do_status() {
   log "=== STATUS ==="
+  
+  # Binary
   if [ -x "$AGH_BIN" ]; then
     ver=$("$AGH_BIN" --version 2>/dev/null | awk '{print $NF}')
     log "Binary: OK ($ver)"
   else
     log "Binary: MISSING"
   fi
+  
+  # Service
   if pgrep -f AdGuardHome >/dev/null 2>&1; then
     log "Service: RUNNING"
   else
     log "Service: STOPPED"
   fi
+  
+  # Config
   if [ -f "$CONF" ]; then
     log "Config: OK"
   else
     log "Config: MISSING"
   fi
+  
+  # Init script
   if [ -x "$INIT" ]; then
     log "Init: OK"
   else
     log "Init: MISSING"
   fi
+  
+  # Hook
   if [ -x "$HOOK" ]; then
     log "Hook: OK"
   else
     log "Hook: MISSING"
   fi
-  if ndmc -c "show ip policy" 2>/dev/null | grep -q "description = $POLICY_NAME"; then    log "Policy: EXISTS"
+  
+  # Policy
+  if ndmc -c "show ip policy" 2>/dev/null | grep -q "description = $POLICY_NAME"; then
+    log "Policy: EXISTS"
   else
     log "Policy: MISSING"
   fi
+  
   log "============"
 }
-
-# === OPKG CHECK ===
+# === OPKG CONFLICT CHECK ===
 check_opkg() {
   if opkg list-installed 2>/dev/null | grep -q "adguardhome-go"; then
-    warn "Package adguardhome-go detected"
-    printf "Action: [H]old | [R]emove | [C]ancel: "
+    warn "Entware package 'adguardhome-go' detected."
+    warn "'opkg upgrade' will overwrite your AdGuard Home binary."
+    printf "Action: [H]old pkg | [R]emove pkg | [C]ancel: "
     read action
     case "$action" in
-      h|H) opkg hold adguardhome-go 2>/dev/null; log "HELD" ;;
-      r|R) opkg remove adguardhome-go 2>/dev/null; log "REMOVED" ;;
-      *) log "Cancelled"; exit 0 ;;
+      h|H)
+        opkg hold adguardhome-go 2>/dev/null
+        log "Package HELD."
+        ;;
+      r|R)
+        opkg remove adguardhome-go 2>/dev/null
+        log "Package REMOVED."
+        ;;
+      *)
+        log "Cancelled."
+        exit 0
+        ;;
     esac
   fi
 }
 
-# === DEPLOY FILES ===
+# === DEPLOY COMPONENTS ===
 deploy() {
   mkdir -p "$AGH_DIR" "$(dirname "$INIT")" "$(dirname "$HOOK")"
-  
+
   # Config
   if [ ! -f "$CONF" ]; then
     get_file "$RAW_BASE/ag-keenetic.conf" "$CONF" 2>/dev/null
@@ -138,8 +183,8 @@ deploy() {
       log "Kept: $CONF"
     fi
   fi
-  
-  # Init
+
+  # Init script
   if ask "Replace $INIT?"; then
     get_file "$RAW_BASE/S99adguardhome" "$INIT"
     chmod +x "$INIT"
@@ -147,7 +192,7 @@ deploy() {
   else
     log "Kept: $INIT"
   fi
-  
+
   # Hook
   if ask "Replace $HOOK?"; then
     get_file "$RAW_BASE/99-adguard-dns.sh" "$HOOK"
@@ -157,166 +202,173 @@ deploy() {
     log "Kept: $HOOK"
   fi
 }
-
-# === DOWNLOAD BINARY ===
+# === DOWNLOAD & INSTALL BINARY ===
 get_binary() {
   get_arch
-  log "Fetching latest AdGuard Home..."
-  
-  # Get API
+  log "Fetching latest AdGuard Home release..."
+
+  # Fetch GitHub API
   if [ "$DOWNLOADER" = "curl" ]; then
     api=$(curl -kfsSL -A "Mozilla/5.0" "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)
   else
     api=$(wget -qO- --no-check-certificate "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)
   fi
-  
-  # Get URL for our arch
+
+  # Extract download URL for our architecture
   url=$(echo "$api" | grep "browser_download_url" | grep "$ARCH_MAP" | grep "tar.gz" | cut -d'"' -f4 | head -1)
   if [ -z "$url" ]; then
-    die "No download URL for $ARCH_MAP"
+    die "No download URL found for architecture: $ARCH_MAP"
   fi
-  
-  tmp="/tmp/ag-$$"
+
+  # Prepare temp directory
+  tmp="/tmp/ag-setup-$$"
   mkdir -p "$tmp"
   dl="$tmp/agh.tar.gz"
-  
+
   # Download
+  log "Downloading binary..."
   if [ "$DOWNLOADER" = "curl" ]; then
     curl -kfsSL -o "$dl" -A "Mozilla/5.0" "$url" 2>/dev/null
   else
     wget -qO "$dl" --no-check-certificate "$url" 2>/dev/null
   fi
-  
+
+  # Validate download
   if [ ! -s "$dl" ]; then
-    die "Download failed"
+    die "Download failed: file is empty."
   fi
-  
-  # Check size
   sz=$(wc -c < "$dl")
   if [ "$sz" -lt 1000 ]; then
-    die "File too small ($sz bytes)"
-  fi  
-  # Validate gzip via tar (BusyBox-safe)
+    die "Download failed: file too small ($sz bytes). Likely GitHub API error."
+  fi
+
+  # Validate gzip archive (BusyBox safe)
   if ! tar -tzf "$dl" >/dev/null 2>&1; then
-    die "Not a valid gzip archive"
+    die "Downloaded file is not a valid gzip archive."
   fi
-  
+
   # Extract
+  log "Extracting archive..."
   if ! tar -xzf "$dl" -C "$tmp"; then
-    die "Extraction failed"
+    die "Extraction failed."
   fi
-  
-  # Find binary
+
+  # Find binary inside archive
   bin=$(find "$tmp" -name AdGuardHome -type f | head -1)
   if [ -z "$bin" ]; then
-    die "Binary not found in archive"
+    die "Binary 'AdGuardHome' not found in archive."
   fi
-  
+
   # Install
+  log "Installing binary to $AGH_BIN..."
   cp -f "$bin" "$AGH_BIN"
   chmod +x "$AGH_BIN"
   rm -rf "$tmp"
-  log "Installed: $AGH_BIN"
+  log "Binary installed successfully."
 }
-
-# === POLICY ===
+# === CREATE KEENETIC NETWORK POLICY ===
 make_policy() {
   if ndmc -c "show ip policy" 2>/dev/null | grep -q "description = $POLICY_NAME"; then
-    log "Policy exists: $POLICY_NAME"
+    log "Policy already exists: $POLICY_NAME"
   else
-    log "Creating policy: $POLICY_NAME"
+    log "Creating policy: $POLICY_NAME..."
     ndmc -c "ip policy $POLICY_NAME" 2>/dev/null
     ndmc -c "ip policy $POLICY_NAME description $POLICY_NAME" 2>/dev/null
     ndmc -c "system configuration save" 2>/dev/null
     if [ $? -eq 0 ]; then
-      log "Policy saved"
+      log "Policy created and saved to startup config."
     else
-      warn "Create manually in Web UI"
+      warn "CLI creation failed."
+      warn "Please create manually: Web UI -> Network Rules -> Policies -> $POLICY_NAME"
     fi
   fi
 }
 
-# === INSTALL ===
+# === INSTALL COMMAND ===
 do_install() {
-  log ">>> INSTALL"
+  log ">>> INSTALLATION STARTED"
   check_tools
   check_opkg
   deploy
   get_binary
   make_policy
-  log "Starting service..."  $INIT start
+  log "Starting AdGuard Home service..."
+  $INIT start
   log ""
   log "INSTALLATION COMPLETE"
-  log "1. Open http://<ROUTER_IP>:3000"
-  log "2. Complete wizard (DNS: 127.0.0.1:5354)"
-  log "3. Assign devices: Web UI -> Policies -> $POLICY_NAME"
-  log "Log: $LOG"
+  log "1. Open http://<ROUTER_IP>:3000 in your browser"
+  log "2. Complete the AdGuard Home setup wizard"
+  log "3. Assign devices: Web UI -> Network Rules -> Policies -> $POLICY_NAME"
+  log "Log file: $LOG"
 }
-
-# === UPDATE ===
+# === UPDATE COMMAND ===
 do_update() {
-  log ">>> UPDATE"
+  log ">>> UPDATE STARTED"
   check_tools
-  
+
   if [ ! -x "$AGH_BIN" ]; then
-    die "Not installed. Run 'install' first."
+    die "AdGuard Home not found. Please run 'install' first."
   fi
-  
-  # Current version
+
+  # Get current version
   cur=$("$AGH_BIN" --version 2>/dev/null | awk '{print $NF}')
   log "Current version: $cur"
-  
+
   # Fetch latest from GitHub API
+  log "Checking for updates..."
   if [ "$DOWNLOADER" = "curl" ]; then
     api=$(curl -kfsSL -A "Mozilla/5.0" "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)
   else
     api=$(wget -qO- --no-check-certificate "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)
   fi
-  
-  # Parse tag_name - simple grep/cut, tested
-  latest=$(echo "$api" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "//' | sed 's/".*//')
-  
+
+  # Robust version parsing for BusyBox
+  latest=$(echo "$api" | grep -o '"tag_name":[ ]*"[^"]*"' | head -1 | cut -d'"' -f4)
+
   if [ -z "$latest" ]; then
-    warn "Could not fetch latest version"
+    warn "Could not determine latest version from GitHub."
     latest="unknown"
+  else
+    log "Latest version: $latest"
   fi
-  
-  log "Latest version: $latest"
-  
+
   # Compare versions
   if [ "$cur" = "$latest" ]; then
-    log "Already up-to-date"
+    log "Already up-to-date."
     exit 0
   fi
-  
-  # Ask before update
+
+  # Ask before updating
   if ask "Update from $cur to $latest?"; then
-    log "Backing up current binary..."
+    log "Backing up current binary to ${AGH_BIN}.bak..."
     cp -f "$AGH_BIN" "${AGH_BIN}.bak"
-    get_binary    log "Restarting service..."
+    get_binary
+    log "Restarting service..."
     $INIT restart
-    log "Updated to $latest"
+    log "Successfully updated to $latest"
   else
-    log "Update cancelled by user"
+    log "Update cancelled."
   fi
 }
 
-# === UNINSTALL ===
+# === UNINSTALL COMMAND ===
 do_uninstall() {
-  log ">>> UNINSTALL"
-  if ask "Stop service and remove files?"; then
+  log ">>> UNINSTALL STARTED"
+  if ask "Stop service and remove all AdGuard Home files?"; then
+    log "Stopping service..."
     $INIT stop 2>/dev/null
+    log "Removing files..."
     rm -f "$AGH_BIN" "${AGH_BIN}.bak" "$CONF" "$INIT" "$HOOK"
-    log "Files removed"
-    log "Policy '$POLICY_NAME' kept. Remove via Web UI if needed."
+    log "Files removed."
+    log "NOTE: Network policy '$POLICY_NAME' was left intact."
+    log "Remove it manually via Web UI if needed: Network Rules -> Policies"
   else
-    log "Cancelled"
+    log "Uninstall cancelled."
   fi
 }
 
-# === MAIN ===
-cmd="${1:-}"
-case "$cmd" in
+# === MAIN ENTRY POINT ===
+case "${1:-}" in
   install)
     do_install
     ;;
@@ -331,7 +383,14 @@ case "$cmd" in
     ;;
   *)
     echo "Usage: $0 {install|update|uninstall|status}"
-    echo "Log: $LOG"
+    echo ""
+    echo "Commands:"
+    echo "  install   - Deploy configs, download binary, create policy, start service"
+    echo "  update    - Check GitHub, backup, replace binary, restart"
+    echo "  uninstall - Stop service, remove files (keeps policy)"
+    echo "  status    - Show current installation state"
+    echo ""
+    echo "Log file: $LOG"
     exit 1
     ;;
 esac
