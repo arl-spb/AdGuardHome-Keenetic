@@ -242,9 +242,17 @@ get_binary() {
     die "Download failed: file too small ($sz bytes). Likely GitHub API error."
   fi
 
-  # Validate gzip archive (BusyBox safe)
+# Validate gzip archive (BusyBox safe) with debug info
   if ! tar -tzf "$dl" >/dev/null 2>&1; then
-    die "Downloaded file is not a valid gzip archive."
+    # Show what we actually downloaded
+    log "DEBUG: Download failed validation. URL: $url"
+    log "DEBUG: File size: $sz bytes"
+    log "DEBUG: First 200 chars: $(head -c 200 "$dl" | tr -d '\n\r')"
+    # Check if it's HTML error page
+    if head -c 100 "$dl" | grep -qi "<!DOCTYPE\|<html\|<body"; then
+      die "Download failed: received HTML error page. GitHub API may be rate-limited."
+    fi
+    die "Not a valid gzip archive. Check URL or network."
   fi
 
   # Extract
