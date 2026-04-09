@@ -225,13 +225,33 @@ get_binary() {
   mkdir -p "$tmp"
   dl="$tmp/agh.tar.gz"
 
-  # Download
-  log "Downloading binary..."
+  # Download with activity indicator
+  echo "Downloading binary (~10-20 MB, may take 1-3 min)..."
+  
   if [ "$DOWNLOADER" = "curl" ]; then
-    curl -kfsSL -o "$dl" -A "Mozilla/5.0" "$url" 2>/dev/null
+    curl -kfsSL -o "$dl" -A "Mozilla/5.0" "$url" 2>/dev/null &
+    CURL_PID=$!
+    while kill -0 $CURL_PID 2>/dev/null; do
+      echo -n "." >&2
+      sleep 5
+    done
+    echo "" >&2
+    wait $CURL_PID
+    [ $? -ne 0 ] && echo "FATAL: Download failed" && exit 1
   else
-    wget -qO "$dl" --no-check-certificate "$url" 2>/dev/null
+    if wget --help 2>&1 | grep -q "show-progress"; then
+      wget -q --show-progress -O "$dl" --no-check-certificate "$url" 2>&1 | grep -E "([0-9]+%|[0-9.]+[KM]B)" || true
+    else
+      wget -qO "$dl" --no-check-certificate "$url" 2>/dev/null
+    fi
   fi
+  
+  sz=$(wc -c < "$dl")
+  echo "Downloaded: $((sz / 1024 / 1024)) MB"
+  
+  # Log result
+  sz=$(wc -c < "$dl")
+  log "Downloaded: $((sz / 1024 / 1024)) MB"
 
   # Validate download
   if [ ! -s "$dl" ]; then
