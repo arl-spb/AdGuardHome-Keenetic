@@ -145,7 +145,8 @@ deploy() {
     chmod +x "$INIT"
     log "Updated: $INIT"
   else
-    log "Kept: $INIT"  fi
+    log "Kept: $INIT"
+  fi
   
   # Hook
   if ask "Replace $HOOK?"; then
