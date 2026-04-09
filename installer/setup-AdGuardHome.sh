@@ -245,14 +245,11 @@ get_binary() {
       wget -qO "$dl" --no-check-certificate "$url" 2>/dev/null
     fi
   fi
-  
-  sz=$(wc -c < "$dl")
-  echo "Downloaded: $((sz / 1024 / 1024)) MB"
-  
-  # Log result
+
+  # Log result 
   sz=$(wc -c < "$dl")
   log "Downloaded: $((sz / 1024 / 1024)) MB"
-
+  
   # Validate download
   if [ ! -s "$dl" ]; then
     die "Download failed: file is empty."
@@ -265,11 +262,9 @@ get_binary() {
 # Validate gzip archive (BusyBox safe) with debug info
   if ! tar -tzf "$dl" >/dev/null 2>&1; then
     # Show what we actually downloaded
-    log "DEBUG: Download failed validation. URL: $url"
-    log "DEBUG: File size: $sz bytes"
-    log "DEBUG: First 200 chars: $(head -c 200 "$dl" | tr -d '\n\r')"
-    # Check if it's HTML error page
-    if head -c 100 "$dl" | grep -qi "<!DOCTYPE\|<html\|<body"; then
+    log "Download validation failed. URL: $url, Size: $sz bytes"
+     # Check if it's HTML error page
+    if dd if="$dl" bs=1 count=100 2>/dev/null | grep -qi "<!DOCTYPE\|<html\|<body"; then
       die "Download failed: received HTML error page. GitHub API may be rate-limited."
     fi
     die "Not a valid gzip archive. Check URL or network."
