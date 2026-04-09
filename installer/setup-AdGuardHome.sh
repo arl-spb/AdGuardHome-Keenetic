@@ -214,12 +214,10 @@ get_binary() {
     api=$(wget -qO- --no-check-certificate "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)
   fi
 
-  # Extract download URL - more robust pattern
-  url=$(echo "$api" | grep -o "browser_download_url[^\"]*\"[^\"]*${ARCH_MAP}[^\"]*tar\.gz" | cut -d'"' -f2 | head -1)
-  
-  # Fallback: simple grep if first method fails
+  # Extract download URL - exact pattern for github.com/download/...
+  url=$(echo "$api" | grep -o "https://github.com[^\"]*/download/[^\"]*${ARCH_MAP}[^\"]*tar\.gz" | head -1)
   if [ -z "$url" ]; then
-    url=$(echo "$api" | grep "browser_download_url" | grep "$ARCH_MAP" | grep "tar.gz" | cut -d'"' -f4 | head -1)
+    die "No download URL found for architecture: $ARCH_MAP"
   fi
 
   # Prepare temp directory
