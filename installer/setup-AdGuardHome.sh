@@ -26,7 +26,7 @@ POLICY_NAME="adguard-clients"
 # === UTILITY: ASK YES/NO ===
 ask() {
   printf "%s [y/N]: " "$1"
-  read answer
+  read answer < /dev/tty
   if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
     return 0
   else
