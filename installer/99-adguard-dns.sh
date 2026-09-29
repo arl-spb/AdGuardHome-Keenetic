@@ -2,6 +2,9 @@
 # 99-adguard-dns.sh - KeeneticOS netfilter hook for AdGuard Home DNS routing
 # Repository: https://github.com/arl-spb/AdGuardHome-Keenetic
 # Note: Called synchronously by ndm. Must return immediately to avoid blocking network init.
+#
+# Policy mark is resolved by S99adguardhome at service start and stored in
+# tmpfs. This hook only reads it — no RCI/ndmc queries in the hot path.
 
 # === Load integration config with safe defaults ===
 : "${AG_LISTEN_IP:=127.0.0.1}"
@@ -13,8 +16,10 @@
 [ -n "$table" ] && [ "$table" != "nat" ] && exit 0
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Get policy mark - fixed variable interpolation
-MARK=$(ndmc -c "show ip policy" 2>/dev/null | grep "$AG_POLICY_NAME" -A5 | grep "mark:" | head -1 | awk '{print $2}' | tr -d '\r\n ')
+MARKFILE="/tmp/.agh/policy-mark"
+
+MARK=""
+[ -r "$MARKFILE" ] && MARK=$(cat "$MARKFILE" 2>/dev/null)
 [ -z "$MARK" ] && exit 0
 
 MARK_HEX="0x$MARK"
@@ -26,5 +31,4 @@ $IPT -t nat -D PREROUTING -p udp --dport 53 -m mark --mark $MARK_HEX -j DNAT --t
 $IPT -t nat -D PREROUTING -p tcp --dport 53 -m mark --mark $MARK_HEX -j DNAT --to-destination $TARGET 2>/dev/null
 $IPT -t nat -I PREROUTING 1 -p udp --dport 53 -m mark --mark $MARK_HEX -j DNAT --to-destination $TARGET
 $IPT -t nat -I PREROUTING 1 -p tcp --dport 53 -m mark --mark $MARK_HEX -j DNAT --to-destination $TARGET
-
 exit 0
