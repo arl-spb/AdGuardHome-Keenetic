@@ -22,6 +22,7 @@ CONF="$AGH_DIR/ag-keenetic.conf"
 INIT="/opt/etc/init.d/S99adguardhome"
 HOOK="/opt/etc/ndm/netfilter.d/99-adguard-dns.sh"
 POLICY_NAME="adguard-clients"
+MARKFILE="/tmp/.agh/policy-mark"
 
 # === UTILITY: ASK YES/NO ===
 ask() {
@@ -49,6 +50,7 @@ get_file() {
     return 1
   fi
 }
+
 # === ARCHITECTURE DETECTION (Keenetic only) ===
 get_arch() {
   arch=$(uname -m)
@@ -92,7 +94,7 @@ check_tools() {
 # === STATUS COMMAND ===
 do_status() {
   log "=== STATUS ==="
-  
+
   # Binary
   if [ -x "$AGH_BIN" ]; then
     ver=$("$AGH_BIN" --version 2>/dev/null | awk '{print $NF}')
@@ -100,51 +102,59 @@ do_status() {
   else
     log "Binary: MISSING"
   fi
-  
+
   # Service
   if pgrep -f AdGuardHome >/dev/null 2>&1; then
     log "Service: RUNNING"
   else
     log "Service: STOPPED"
   fi
-  
+
   # Config
   if [ -f "$CONF" ]; then
     log "Config: OK"
   else
     log "Config: MISSING"
   fi
-  
+
   # Init script
   if [ -x "$INIT" ]; then
     log "Init: OK"
   else
     log "Init: MISSING"
   fi
-  
+
   # Hook
   if [ -x "$HOOK" ]; then
     log "Hook: OK"
   else
     log "Hook: MISSING"
   fi
-  
+
   # Policy
   if ndmc -c "show ip policy" 2>/dev/null | grep -q "description = $POLICY_NAME"; then
     log "Policy: EXISTS"
   else
     log "Policy: MISSING"
   fi
-  
+
+  # Policy mark (runtime, resolved by S99adguardhome via RCI)
+  if [ -f "$MARKFILE" ]; then
+    log "Policy mark: 0x$(cat "$MARKFILE")"
+  else
+    log "Policy mark: MISSING (service not started?)"
+  fi
+
   log "============"
 }
+
 # === OPKG CONFLICT CHECK ===
 check_opkg() {
   if opkg list-installed 2>/dev/null | grep -q "adguardhome-go"; then
     warn "Entware package 'adguardhome-go' detected."
     warn "'opkg upgrade' will overwrite your AdGuard Home binary."
     printf "Action: [H]old pkg | [R]emove pkg | [C]ancel: "
-    read action
+    read action < /dev/tty
     case "$action" in
       h|H)
         opkg hold adguardhome-go 2>/dev/null
@@ -168,17 +178,21 @@ deploy() {
 
   # Config
   if [ ! -f "$CONF" ]; then
-    get_file "$RAW_BASE/ag-keenetic.conf" "$CONF" 2>/dev/null
-    if [ $? -ne 0 ]; then
+    if get_file "$RAW_BASE/ag-keenetic.conf" "$CONF" 2>/dev/null; then
+      log "Created: $CONF"
+    else
       printf 'AG_LISTEN_IP="127.0.0.1"\nAG_LISTEN_PORT="5354"\nAG_POLICY_NAME="adguard-clients"\n' > "$CONF"
+      log "Created (fallback): $CONF"
     fi
     chmod 644 "$CONF"
-    log "Created: $CONF"
   else
     if ask "Replace $CONF?"; then
-      get_file "$RAW_BASE/ag-keenetic.conf" "$CONF"
-      chmod 644 "$CONF"
-      log "Updated: $CONF"
+      if get_file "$RAW_BASE/ag-keenetic.conf" "$CONF"; then
+        chmod 644 "$CONF"
+        log "Updated: $CONF"
+      else
+        warn "Failed to download $CONF"
+      fi
     else
       log "Kept: $CONF"
     fi
@@ -186,48 +200,51 @@ deploy() {
 
   # Init script
   if ask "Replace $INIT?"; then
-    get_file "$RAW_BASE/S99adguardhome" "$INIT"
-    chmod +x "$INIT"
-    log "Updated: $INIT"
+    if get_file "$RAW_BASE/S99adguardhome" "$INIT"; then
+      chmod +x "$INIT"
+      log "Updated: $INIT"
+    else
+      warn "Failed to download $INIT"
+    fi
   else
     log "Kept: $INIT"
   fi
 
   # Hook
   if ask "Replace $HOOK?"; then
-    get_file "$RAW_BASE/99-adguard-dns.sh" "$HOOK"
-    chmod +x "$HOOK"
-    log "Updated: $HOOK"
+    if get_file "$RAW_BASE/99-adguard-dns.sh" "$HOOK"; then
+      chmod +x "$HOOK"
+      log "Updated: $HOOK"
+    else
+      warn "Failed to download $HOOK"
+    fi
   else
     log "Kept: $HOOK"
   fi
 }
+
 # === DOWNLOAD & INSTALL BINARY ===
 get_binary() {
   get_arch
   log "Fetching latest AdGuard Home release..."
 
-  # Fetch GitHub API
   if [ "$DOWNLOADER" = "curl" ]; then
     api=$(curl -kfsSL -A "Mozilla/5.0" "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)
   else
     api=$(wget -qO- --no-check-certificate "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)
   fi
 
-  # Extract download URL - exact pattern for github.com/download/...
   url=$(echo "$api" | grep -o "https://github.com[^\"]*/download/[^\"]*${ARCH_MAP}[^\"]*tar\.gz" | head -1)
   if [ -z "$url" ]; then
     die "No download URL found for architecture: $ARCH_MAP"
   fi
 
-  # Prepare temp directory
   tmp="/tmp/ag-setup-$$"
   mkdir -p "$tmp"
   dl="$tmp/agh.tar.gz"
 
-  # Download with activity indicator
   echo "Downloading binary (~10-20 MB, may take 1-3 min)..."
-  
+
   if [ "$DOWNLOADER" = "curl" ]; then
     curl -kfsSL -o "$dl" -A "Mozilla/5.0" "$url" 2>/dev/null &
     CURL_PID=$!
@@ -246,11 +263,9 @@ get_binary() {
     fi
   fi
 
-  # Log result 
   sz=$(wc -c < "$dl")
   log "Downloaded: $((sz / 1024 / 1024)) MB"
-  
-  # Validate download
+
   if [ ! -s "$dl" ]; then
     die "Download failed: file is empty."
   fi
@@ -259,36 +274,31 @@ get_binary() {
     die "Download failed: file too small ($sz bytes). Likely GitHub API error."
   fi
 
-# Validate gzip archive (BusyBox safe) with debug info
   if ! tar -tzf "$dl" >/dev/null 2>&1; then
-    # Show what we actually downloaded
     log "Download validation failed. URL: $url, Size: $sz bytes"
-     # Check if it's HTML error page
     if dd if="$dl" bs=1 count=100 2>/dev/null | grep -qi "<!DOCTYPE\|<html\|<body"; then
       die "Download failed: received HTML error page. GitHub API may be rate-limited."
     fi
     die "Not a valid gzip archive. Check URL or network."
   fi
 
-  # Extract
   log "Extracting archive..."
   if ! tar -xzf "$dl" -C "$tmp"; then
     die "Extraction failed."
   fi
 
-  # Find binary inside archive
   bin=$(find "$tmp" -name AdGuardHome -type f | head -1)
   if [ -z "$bin" ]; then
     die "Binary 'AdGuardHome' not found in archive."
   fi
 
-  # Install
   log "Installing binary to $AGH_BIN..."
   cp -f "$bin" "$AGH_BIN"
   chmod +x "$AGH_BIN"
   rm -rf "$tmp"
   log "Binary installed successfully."
 }
+
 # === CREATE KEENETIC NETWORK POLICY ===
 make_policy() {
   if ndmc -c "show ip policy" 2>/dev/null | grep -q "description = $POLICY_NAME"; then
@@ -318,8 +328,8 @@ do_install() {
   log "Starting AdGuard Home service..."
   $INIT start
   # Verify policy mark was resolved
-  if [ -f /tmp/.agh/policy-mark ]; then
-    log "Policy mark: 0x$(cat /tmp/.agh/policy-mark)"
+  if [ -f "$MARKFILE" ]; then
+    log "Policy mark: 0x$(cat "$MARKFILE")"
   else
     warn "Policy mark not resolved. Check RCI and policy name."
   fi
@@ -330,6 +340,7 @@ do_install() {
   log "3. Assign devices: Web UI -> Network Rules -> Policies -> $POLICY_NAME"
   log "Log file: $LOG"
 }
+
 # === UPDATE COMMAND ===
 do_update() {
   log ">>> UPDATE STARTED"
