@@ -317,6 +317,12 @@ do_install() {
   make_policy
   log "Starting AdGuard Home service..."
   $INIT start
+  # Verify policy mark was resolved
+  if [ -f /tmp/.agh/policy-mark ]; then
+    log "Policy mark: 0x$(cat /tmp/.agh/policy-mark)"
+  else
+    warn "Policy mark not resolved. Check RCI and policy name."
+  fi
   log ""
   log "INSTALLATION COMPLETE"
   log "1. Open http://<ROUTER_IP>:3000 in your browser"
